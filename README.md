@@ -1,56 +1,63 @@
 # OpenCode Codex Bridge
 
-Use OpenCode as a terminal frontend for Codex CLI, with local prompt suggestions from [opencode-ghost](https://github.com/racinette/opencode-ghost).
+Use OpenCode as a terminal frontend for Codex CLI.
 
 Codex executes tasks and stores conversation history. The bridge connects OpenCode's HTTP/SSE client to a local `codex app-server`; the TUI plugin supplies native command and approval dialogs. Authentication, instructions, skills, MCP tools, sandboxing, and approval policy come from Codex.
 
 ## Requirements
 
-- Bun 1.3.14 or later and Node 22 or later for development checks.
-- Codex CLI 0.161.0, installed on `PATH` and authenticated with `codex login`.
-- OpenCode with the prompt ghost API, and `opencode-ghost`.
-- A local llama.cpp completion server for ghost suggestions; default: `http://127.0.0.1:8080`.
+- Bun 1.3.14 or later.
+- Codex CLI on `PATH`, authenticated with `codex login`. The protocol bindings target version 0.161.0.
+- OpenCode with TUI plugin support. The frontend integration has been tested with version 1.18.35.
+- Node on `PATH` when connecting to a managed Codex daemon; Node 22 or later for development checks.
 
-The local launcher expects sibling `opencode`, `opencode-ghost`, and `opencode-codex-bridge` directories.
+## Setup
 
-## Run locally
-
-Install the bridge dependencies:
+Clone this repository anywhere and install its dependencies:
 
 ```sh
+git clone https://github.com/racinette/opencode-codex-bridge.git
 cd opencode-codex-bridge
 bun install
-bun run ui /path/to/project
 ```
 
-From the shared workspace, start the frontend for a project:
+Add the bridge's TUI plugin to your project's `.opencode/tui.json`. Replace the path with the absolute path to your clone and preserve existing plugin entries:
+
+```json
+{
+  "plugin": ["/absolute/path/opencode-codex-bridge/src/tui.tsx"]
+}
+```
+
+From the bridge repository, start the backend for your project:
 
 ```sh
-./try-codex.sh /path/to/project
+bun start --cwd /absolute/path/to/project --port 4097
 ```
 
-Resume the latest conversation in that directory, or a specific native Codex thread:
+In another terminal, connect your installed OpenCode frontend:
 
 ```sh
-./try-codex.sh /path/to/project --continue
-./try-codex.sh /path/to/project --thread <codex-thread-uuid>
+opencode attach http://127.0.0.1:4097 --dir /absolute/path/to/project
 ```
 
-To continue a conversation owned by your running Codex client, connect to its managed daemon:
+The TUI plugin discovers the attached server through the OpenCode SDK. Use `/resume` to select an existing Codex conversation for that directory. Keep the bridge running while using the frontend; stop it with Ctrl+C after exiting OpenCode.
+
+### Connecting to an existing Codex daemon
+
+To use the backend shared by a running Codex client, start the bridge with `--daemon`:
 
 ```sh
-./try-codex.sh /path/to/project --daemon --thread <codex-thread-uuid>
+bun start --cwd /absolute/path/to/project --port 4097 --daemon
 ```
 
-`--daemon` uses the existing Codex backend and requires Node on `PATH`. Exiting OpenCode closes only the bridge connection; the daemon keeps running. Finish the current turn before submitting from another frontend.
+Attach OpenCode with the same command above, then select the conversation with `/resume`. This requires a running managed Codex daemon and Node on `PATH`. Stopping the bridge closes its connection; the daemon keeps running. Finish the current turn before submitting from another frontend.
 
-Without `--daemon`, the bridge starts a separate app-server. Codex permits one writer process per thread, so it cannot resume a thread still loaded by another backend. Closing a chat can leave it loaded for a 30-minute inactivity grace period after the last subscriber disconnects.
+Without `--daemon`, the bridge starts a separate app-server. Codex permits one writer process per thread, so it cannot resume a thread still loaded by another backend. A disconnected thread can remain loaded until the native backend's inactivity grace period expires.
 
-The launcher chooses an available loopback port, loads both plugins, and stops the bridge when OpenCode exits. To use another completion server, add `--ghost-endpoint http://127.0.0.1:8080`.
+The server inherits Codex's configuration. Explicit overrides are available with `--approval-policy`, `--sandbox`, and `--approvals-reviewer`.
 
 ## Using the frontend
-
-Type normally. Ghost suggestions use the prompt and recent user/assistant conversation from the current Codex thread. At the end of the real input, Right Arrow accepts one word; a second quick press accepts the remaining suggestion. Ghost text is never submitted until accepted or typed.
 
 Submitting during an active turn steers that Codex turn. OpenCode's interrupt action calls Codex's native interruption method. Tab switches between Codex and native Plan mode; the model and reasoning selectors use Codex's model catalog.
 
@@ -89,33 +96,11 @@ MCP form requests open an editor with typed fields, a JSON editor for nested res
 
 OpenCode's theme, layout, copy, and other display commands continue to control the frontend.
 
-## Run the components separately
+## Optional prompt suggestions
 
-```sh
-cd opencode-codex-bridge
-bun start --cwd /path/to/project --port 4097
-```
+[opencode-ghost](https://github.com/racinette/opencode-ghost) is a separate plugin that adds inline prompt suggestions. Install and configure it following its own README, preserving the bridge entry in `tui.json`. It requires OpenCode's prompt ghost API and a completion endpoint.
 
-Add `--daemon` to attach to the running managed daemon. The server inherits Codex's configuration. Explicit overrides are available with `--approval-policy`, `--sandbox`, and `--approvals-reviewer`.
-
-Load the TUI plugin alongside `opencode-ghost` in `tui.json`, with absolute paths to the plugin entry points:
-
-```json
-{
-  "plugin": [
-    [
-      "/path/to/opencode-ghost/src/index.tsx",
-      { "endpoint": "http://127.0.0.1:8080" }
-    ],
-    [
-      "/path/to/opencode-codex-bridge/src/tui.tsx",
-      { "endpoint": "http://127.0.0.1:4097" }
-    ]
-  ]
-}
-```
-
-The bridge plugin discovers the attached server through the OpenCode SDK. Then run `opencode attach http://127.0.0.1:4097 --dir /path/to/project`.
+The ghost plugin uses the prompt and recent user/assistant conversation exposed by OpenCode, including conversations served by this bridge. Each plugin can be installed and used independently.
 
 ## Supported scope
 
@@ -127,15 +112,13 @@ Full Codex CLI command and UI parity is not implemented. OpenCode snapshot undo/
 
 ```sh
 bun run check
-bun script/parity-smoke.ts
 bun script/native-controls-smoke.ts
 bun script/live-smoke.ts
-bun script/terminal-smoke.ts
 ```
 
-`check` runs typechecking and automated tests with a fixture app-server subprocess and the real OpenCode SDK. `parity-smoke` uses tmux and the real OpenCode frontend with the fixture backend to exercise command dialogs, typed MCP forms, and subagent navigation. `native-controls-smoke` checks the installed Codex backend with an isolated thread and a local stdio MCP peer, including permission changes and a real elicitation round-trip; it does not make model requests.
+`check` runs typechecking and automated tests with a fixture app-server subprocess and the OpenCode SDK. `native-controls-smoke` checks the installed Codex backend with an isolated thread and a local stdio MCP peer, including permission changes and a real elicitation round-trip; it does not make model requests.
 
-`live-smoke` and `terminal-smoke` use your authenticated Codex account and make model requests in isolated temporary workspaces and native test threads. `terminal-smoke` also needs tmux and the local completion server. All checks close the processes they start.
+`live-smoke` uses your authenticated Codex account and makes model requests in isolated temporary workspaces and native test threads. Both smoke scripts close the processes they start.
 
 The checked-in protocol bindings were generated by Codex CLI 0.161.0:
 
